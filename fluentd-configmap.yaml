@@ -1,0 +1,60 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fluentd-configmap
+  namespace: logging
+data:
+  fluent.conf: |
+    # here we read the logs from Docker's containers and parse them
+    <match fluent.**>
+        # this tells fluentd to not output its log on stdout
+        @type null
+    </match>
+    <source>
+      @type tail
+      path /var/log/containers/*.log
+      pos_file /var/log/containers.log.pos
+      tag kubernetes.*
+      read_from_head true
+      <parse>
+        @type json
+        time_format %Y-%m-%dT%H:%M:%S.%NZ
+      </parse>
+    </source>
+    # we use kubernetes metadata plugin to add metadatas to the log
+    <filter kubernetes.**>
+        @type kubernetes_metadata
+    </filter>
+     # we send the logs to Elasticsearch
+    <match kubernetes.**>
+       @type elasticsearch_dynamic
+       @log_level info
+       include_tag_key true
+       host "#{ENV['FLUENT_ELASTICSEARCH_HOST']}"
+       port "#{ENV['FLUENT_ELASTICSEARCH_PORT']}"
+       user "#{ENV['FLUENT_ELASTICSEARCH_USER']}"
+       password "#{ENV['FLUENT_ELASTICSEARCH_PASSWORD']}"
+       scheme "#{ENV['FLUENT_ELASTICSEARCH_SCHEME'] || 'http'}"
+       ssl_verify "#{ENV['FLUENT_ELASTICSEARCH_SSL_VERIFY'] || 'true'}"
+       # for failed to flush the buffer config
+       # reload_connections true <- before config
+       reload_connections false
+       reconnect_on_error true
+       reload_on_failure true
+       logstash_format true
+       logstash_prefix ${record['kubernetes']['namespace_name']}
+       <buffer>
+           @type file
+           path /var/log/fluentd-buffers/kubernetes.system.buffer
+           flush_mode interval
+           retry_type exponential_backoff
+           flush_thread_count 4
+           flush_interval 5s
+           retry_forever true
+           retry_max_interval 30
+           chunk_limit_size 2M
+           queue_limit_length 100
+           #queue_limit_length 32 <- before config
+           overflow_action block
+       </buffer>
+    </match>
